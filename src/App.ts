@@ -5,16 +5,20 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import JSZip from "jszip";
-import parse5 from "parse5";
+import * as parse5 from "parse5";
 import Decimal from "decimal.js";
 import { StatusCodes } from "http-status-codes";
 
 import coursesRouter from "./routers/coursesRouter";
 import sectionsRouter from "./routers/sectionsRouter";
+import buildingsRouter from "./routers/buildingsRouter";
+import roomsRouter from "./routers/roomsRouter";
 import { validateGetParams } from "./validation/coursesValidation";
 import { DataDirectory } from "./repositories/dataDirectory";
 import { Course } from "./services/course";
 import { Section } from "./services/section";
+import { Building } from "./services/building";
+import { Room } from "./services/room";
 
 const datasets: Dataset[] = [];
 const RESULT_LIMIT = 5000;
@@ -74,7 +78,8 @@ export async function createApp(config: AppConfig): Promise<Application> {
 
 	app.use(coursesRouter);
 	app.use(sectionsRouter);
-
+	app.use(buildingsRouter);
+	app.use(roomsRouter);
 	datasets.splice(0);
 
 	// Basic message to verify REST API is available
@@ -119,65 +124,9 @@ export async function createApp(config: AppConfig): Promise<Application> {
 		res.status(output.status).json(output.body);
 	});
 
-	app.get("/api/v2/buildings", async (req, res) => {
-		const model = new Model(datadir);
-		const output = await model.getBuildings(req.query.limit, req.query.offset);
-		res.status(output.status).json(output.body);
-	});
-
-	app.get("/api/v2/buildings/:buildingId", async (req, res) => {
-		const model = new Model(datadir);
-		const output = await model.getBuildingById(req.params.buildingId);
-		res.status(output.status).send(output.body);
-	});
-
-	app.put("/api/v2/buildings/:buildingId", async (req, res) => {
-		const model = new Model(datadir);
-		const output = await model.setBuilding(
-			req.params.buildingId,
-			req.body.name,
-			req.body.address,
-			req.body.lat,
-			req.body.lon,
-			req.body.campus
-		);
-		res.status(output.status).send(output.body);
-	});
-
-	app.delete("/api/v2/buildings/:buildingId", async (req, res) => {
-		const model = new Model(datadir);
-		const output = await model.deleteBuilding(req.params.buildingId);
-		res.status(output.status).send(output.body);
-	});
-
-	app.get("/api/v2/buildings/:buildingId/rooms", async (req, res) => {
-		const model = new Model(datadir);
-		const output = await model.getRooms(req.params.buildingId, req.query.limit, req.query.offset);
-		res.status(output.status).send(output.body);
-	});
-
-	app.get("/api/v2/buildings/:buildingId/rooms/:roomId", async (req, res) => {
-		const model = new Model(datadir);
-		const output = await model.getRoomById(req.params.buildingId, req.params.roomId);
-		res.status(output.status).send(output.body);
-	});
-
-	app.put("/api/v2/buildings/:buildingId/rooms/:roomId", async (req, res) => {
-		const model = new Model(datadir);
-		const output = await model.setRoom(req.params.buildingId, req.params.roomId, req.body);
-		res.status(output.status).send(output.body);
-	});
-
-	app.delete("/api/v2/buildings/:buildingId/rooms/:roomId", async (req, res) => {
-		const model = new Model(datadir);
-		const output = await model.deleteRoom(req.params.buildingId, req.params.roomId);
-		res.status(output.status).send(output.body);
-	});
-
 	return app;
 }
 
-const prefixBuildings = "/api/v2/buildings";
 const SECTIONS_MKEY = ["avg", "pass", "fail", "audit", "year"];
 const SECTIONS_SKEY = ["title", "dept", "code", "instructor"];
 const ROOMS_MKEY = ["lat", "lon", "seats"];
@@ -952,7 +901,7 @@ class BuildingsDataset extends Dataset {
 
 	private findTable(document: parse5.DefaultTreeAdapterTypes.Document): ParseElement | undefined {
 		let result: ParseElement | undefined = undefined;
-		document.childNodes.forEach((child) => {
+		document.childNodes.forEach((child: ParseNode) => {
 			const tableNode: ParseElement | undefined = this.searchChildForElement(child, "views-table");
 
 			if (tableNode !== undefined && tableNode !== null) {
@@ -1046,7 +995,7 @@ class BuildingsDataset extends Dataset {
 
 	private findCampus(document: parse5.DefaultTreeAdapterTypes.Document): ParseElement | undefined {
 		let result: ParseElement | undefined = undefined;
-		document.childNodes.forEach((child) => {
+		document.childNodes.forEach((child: ParseNode) => {
 			const campusNode = this.searchChildForElement(child, "ubc7-campus");
 			if (campusNode !== undefined && campusNode !== null) {
 				result = campusNode;
@@ -1700,219 +1649,6 @@ class CoursesDataset extends Dataset {
 		}
 
 		this.files[1]++; // files_processed
-	}
-}
-
-type RoomJSONLinks = {
-	id: string;
-	building: string;
-	number: string;
-	type: string;
-	furniture: string;
-	href: string;
-	seats: number;
-	links: { self: string; building: string };
-};
-
-type RoomJSONFull = {
-	id: string;
-	building: string;
-	number: string;
-	type: string;
-	furniture: string;
-	href: string;
-	seats: number;
-};
-
-type BuildingJSONLinks = {
-	id: string;
-	name: string;
-	address: string;
-	lat: number;
-	lon: number;
-	campus?: string;
-	links: { self: string; rooms: string };
-};
-
-type BuildingJSONFull = {
-	id: string;
-	name: string;
-	address: string;
-	lat: number;
-	lon: number;
-	campus?: string;
-	rooms: RoomJSONFull[];
-};
-
-type BuildingJSONForDelete = {
-	id: string;
-	name: string;
-	address: string;
-	lat: number;
-	lon: number;
-	campus?: string;
-	rooms: number;
-};
-
-class Building {
-	constructor(
-		public id: string,
-		public name: string,
-		public address: string,
-		public lat: number,
-		public lon: number,
-		public campus?: string
-	) {}
-
-	public rooms: Room[] = [];
-
-	public getJSONLinks(): BuildingJSONLinks {
-		return {
-			id: this.id,
-			name: this.name,
-			address: this.address,
-			lat: this.lat,
-			lon: this.lon,
-			links: {
-				self: `${prefixBuildings}/${this.id}`,
-				rooms: `${prefixBuildings}/${this.id}/rooms`,
-			},
-			campus: this.campus !== undefined ? this.campus : undefined,
-		};
-	}
-
-	public getJSONFull(): BuildingJSONFull {
-		return {
-			id: this.id,
-			name: this.name,
-			address: this.address,
-			lat: this.lat,
-			lon: this.lon,
-			rooms: this.rooms.map((room) => room.getJSONFull()),
-			campus: this.campus !== undefined ? this.campus : undefined,
-		};
-	}
-
-	public getJSONForDelete(): BuildingJSONForDelete {
-		return {
-			id: this.id,
-			name: this.name,
-			address: this.address,
-			lat: this.lat,
-			lon: this.lon,
-			rooms: this.rooms.length,
-			campus: this.campus !== undefined ? this.campus : undefined,
-		};
-	}
-
-	public static buildBuilding(data: Building): Building {
-		const newBuilding = new Building(data.id, data.name, data.address, data.lat, data.lon, data.campus);
-		newBuilding.rooms = data.rooms.map((room: Room) => Room.buildRoom(room, newBuilding));
-		return newBuilding;
-	}
-
-	public getRooms(): Room[] {
-		return this.rooms;
-	}
-
-	public getRoomById(id: string): Room | undefined {
-		return this.rooms.find((room) => room.id === id);
-	}
-
-	public setRoom(
-		id: string,
-		number: string,
-		type: string,
-		furniture: string,
-		href: string,
-		seats: number
-	): { replace: boolean; body: RoomJSONLinks } {
-		let exist = false;
-		if (this.getRoomById(id)) {
-			exist = true;
-			this.deleteRoom(id);
-		}
-		const room = new Room(id, this.id, number, type, furniture, href, seats, this);
-		this.rooms.push(room);
-		return {
-			replace: exist,
-			body: room.getJSONLinks(),
-		};
-	}
-
-	public deleteRoom(id: string): { success: boolean; body: RoomJSONFull | {} } {
-		const index = this.rooms.findIndex((room) => room.id === id);
-		if (index >= 0) {
-			const body = this.rooms[index].getJSONFull();
-			this.rooms.splice(index, 1);
-			return {
-				success: true,
-				body: body,
-			};
-		} else {
-			return {
-				success: false,
-				body: {},
-			};
-		}
-	}
-}
-
-class Room implements FilterableRecord {
-	constructor(
-		public id: string,
-		public building: string,
-		public number: string,
-		public type: string,
-		public furniture: string,
-		public href: string,
-		public seats: number,
-		public building_obj: Building
-	) {}
-
-	public isSame(other: FilterableRecord): boolean {
-		if (!(other instanceof Room)) {
-			return false;
-		}
-		return this.id === other.id && this.building === other.building;
-	}
-
-	public getJSONLinks(): RoomJSONLinks {
-		return {
-			id: this.id,
-			building: this.building,
-			number: this.number,
-			type: this.type,
-			furniture: this.furniture,
-			href: this.href,
-			seats: this.seats,
-			links: {
-				self: `${prefixBuildings}/${this.building}/rooms/${this.id}`,
-				building: `${prefixBuildings}/${this.building}`,
-			},
-		};
-	}
-
-	public getJSONFull(): RoomJSONFull {
-		return {
-			id: this.id,
-			building: this.building,
-			number: this.number,
-			type: this.type,
-			furniture: this.furniture,
-			href: this.href,
-			seats: this.seats,
-		};
-	}
-
-	public static buildRoom(data: Room, building: Building): Room {
-		const { id, number, type, furniture, href, seats } = data;
-		return new Room(id, data.building, number, type, furniture, href, seats, building);
-	}
-
-	public getValue(key: string): any {
-		if (["name", "address", "lat", "lon", "campus"].includes(key)) return (this.building_obj.getJSONFull() as any)[key];
-		else return (this.getJSONFull() as any)[key];
 	}
 }
 

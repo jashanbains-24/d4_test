@@ -12251,4 +12251,184 @@ describe("REST API v2", function () {
 			seats: 160,
 		});
 	});
+
+	//----------------------------------------------------------------------------------------------------//
+	//                                                                                                    //
+	//                                   2A FACILITIES BOUNDARY TESTS                                     //
+	//                                                                                                    //
+	//----------------------------------------------------------------------------------------------------//
+
+	it("Test 2A_B1: PUT /api/v2/buildings/:buildingId should succeed without campus", async () => {
+		const res = await request(app).put("/api/v2/buildings/DMP").send({
+			name: "Hugh Dempster Pavilion",
+			address: "6245 Agronomy Road V6T 1Z4",
+			lat: 49.26125,
+			lon: -123.24807,
+		});
+		expect(res).to.have.property("status", CREATED);
+		expect(res.body).to.not.have.property("campus");
+	});
+
+	it("Test 2A_B2: PUT /api/v2/buildings/:buildingId should preserve existing campus when omitted on update", async () => {
+		// First create with campus
+		await request(app).put("/api/v2/buildings/DMP").send({
+			name: "Hugh Dempster Pavilion",
+			address: "6245 Agronomy Road V6T 1Z4",
+			lat: 49.26125,
+			lon: -123.24807,
+			campus: "vancouver campus",
+		});
+
+		// Update without campus
+		const updateRes = await request(app).put("/api/v2/buildings/DMP").send({
+			name: "Hugh Dempster Pavilion Updated",
+			address: "6245 Agronomy Road V6T 1Z4",
+			lat: 49.26125,
+			lon: -123.24807,
+		});
+		expect(updateRes).to.have.property("status", NO_CONTENT);
+
+		// Verify campus was retained
+		const getRes = await request(app).get("/api/v2/buildings/DMP");
+		expect(getRes).to.have.property("status", OK);
+		expect(getRes.body).to.have.property("campus", "vancouver campus");
+	});
+
+	it("Test 2A_B3: PUT /api/v2/buildings/:buildingId should reject non-string campus with 422", async () => {
+		const res = await request(app).put("/api/v2/buildings/DMP").send({
+			name: "Hugh Dempster Pavilion",
+			address: "6245 Agronomy Road V6T 1Z4",
+			lat: 49.26125,
+			lon: -123.24807,
+			campus: 12345,
+		});
+		expect(res).to.have.property("status", UNPROCESSABLE_ENTITY);
+		expect(res.body).to.deep.equal({
+			error: "Validation failed",
+			fields: {
+				campus: "expected a string",
+			},
+		});
+	});
+
+	it("Test 2A_B4: PUT room with boundary seats = 0 should succeed with 201", async () => {
+		await request(app).put("/api/v2/buildings/DMP").send({
+			name: "Hugh Dempster Pavilion",
+			address: "6245 Agronomy Road V6T 1Z4",
+			lat: 49.26125,
+			lon: -123.24807,
+		});
+
+		const res = await request(app).put("/api/v2/buildings/DMP/rooms/DMP_001").send({
+			building: "DMP",
+			number: "001",
+			type: "Storage",
+			furniture: "None",
+			href: "http://example.com",
+			seats: 0,
+		});
+		expect(res).to.have.property("status", CREATED);
+	});
+
+	it("Test 2A_B5: PUT room with negative seats (-1) should reject with 422", async () => {
+		await request(app).put("/api/v2/buildings/DMP").send({
+			name: "Hugh Dempster Pavilion",
+			address: "6245 Agronomy Road V6T 1Z4",
+			lat: 49.26125,
+			lon: -123.24807,
+		});
+
+		const res = await request(app).put("/api/v2/buildings/DMP/rooms/DMP_001").send({
+			building: "DMP",
+			number: "001",
+			type: "Classroom",
+			furniture: "Fixed Tables",
+			href: "http://example.com",
+			seats: -1,
+		});
+		expect(res).to.have.property("status", UNPROCESSABLE_ENTITY);
+		expect(res.body).to.deep.equal({
+			error: "Validation failed",
+			fields: {
+				seats: "expected a number >= 0",
+			},
+		});
+	});
+
+	it("Test 2A_B6: PUT room with fractional seats should reject with 422", async () => {
+		await request(app).put("/api/v2/buildings/DMP").send({
+			name: "Hugh Dempster Pavilion",
+			address: "6245 Agronomy Road V6T 1Z4",
+			lat: 49.26125,
+			lon: -123.24807,
+		});
+
+		const res = await request(app).put("/api/v2/buildings/DMP/rooms/DMP_001").send({
+			building: "DMP",
+			number: "001",
+			type: "Classroom",
+			furniture: "Fixed Tables",
+			href: "http://example.com",
+			seats: 35.5,
+		});
+		expect(res).to.have.property("status", UNPROCESSABLE_ENTITY);
+		expect(res.body).to.deep.equal({
+			error: "Validation failed",
+			fields: {
+				seats: "expected a number >= 0",
+			},
+		});
+	});
+
+	it("Test 2A_B7: PUT room with mismatched building identifier in body should reject with 422", async () => {
+		await request(app).put("/api/v2/buildings/DMP").send({
+			name: "Hugh Dempster Pavilion",
+			address: "6245 Agronomy Road V6T 1Z4",
+			lat: 49.26125,
+			lon: -123.24807,
+		});
+
+		const res = await request(app).put("/api/v2/buildings/DMP/rooms/DMP_101").send({
+			building: "ICCS",
+			number: "101",
+			type: "Classroom",
+			furniture: "Fixed Tables",
+			href: "http://example.com",
+			seats: 50,
+		});
+		expect(res).to.have.property("status", UNPROCESSABLE_ENTITY);
+		expect(res.body).to.deep.equal({
+			error: "Validation failed",
+			fields: {
+				building: "must match parent building in path",
+			},
+		});
+	});
+
+	it("Test 2A_B8: GET /api/v2/buildings with limit boundary 1 and 5000 should succeed", async () => {
+		const resMin = await request(app).get("/api/v2/buildings?limit=1&offset=0");
+		expect(resMin).to.have.property("status", OK);
+
+		const resMax = await request(app).get("/api/v2/buildings?limit=5000&offset=0");
+		expect(resMax).to.have.property("status", OK);
+	});
+
+	it("Test 2A_B9: GET /api/v2/buildings with invalid limit boundaries 0 and 5001 should reject with 400", async () => {
+		const resZero = await request(app).get("/api/v2/buildings?limit=0");
+		expect(resZero).to.have.property("status", BAD_REQUEST);
+
+		const resOver = await request(app).get("/api/v2/buildings?limit=5001");
+		expect(resOver).to.have.property("status", BAD_REQUEST);
+	});
+
+	it("Test 2A_B10: GET /api/v2/buildings with negative offset should reject with 400", async () => {
+		const res = await request(app).get("/api/v2/buildings?offset=-1");
+		expect(res).to.have.property("status", BAD_REQUEST);
+		expect(res.body).to.deep.equal({
+			error: "Invalid request parameters",
+			params: {
+				offset: "expected an integer >= 0",
+			},
+		});
+	});
 });
