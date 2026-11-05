@@ -1,25 +1,25 @@
 import type { Request, Response } from "express";
-import { Model } from "../App";
+import { FacilitiesService } from "../services/facilitiesService";
 import { DataDirectory } from "../repositories/dataDirectory";
 
 export async function getBuildings(req: Request, res: Response): Promise<void> {
 	const datadir = DataDirectory.getInstance().getDataDirectory();
-	const model = new Model(datadir);
-	const output = await model.getBuildings(req.query.limit, req.query.offset);
+	const service = new FacilitiesService(datadir);
+	const output = await service.getBuildings(req.query.limit, req.query.offset);
 	res.status(output.status).json(output.body);
 }
 
 export async function getBuildingById(req: Request, res: Response): Promise<void> {
 	const datadir = DataDirectory.getInstance().getDataDirectory();
-	const model = new Model(datadir);
-	const output = await model.getBuildingById(req.params.buildingId);
+	const service = new FacilitiesService(datadir);
+	const output = await service.getBuildingById(req.params.buildingId);
 	res.status(output.status).send(output.body);
 }
 
 export async function putBuilding(req: Request, res: Response): Promise<void> {
 	const datadir = DataDirectory.getInstance().getDataDirectory();
-	const model = new Model(datadir);
-	const output = await model.setBuilding(
+	const service = new FacilitiesService(datadir);
+	const output = await service.setBuilding(
 		req.params.buildingId,
 		req.body.name,
 		req.body.address,
@@ -32,7 +32,7 @@ export async function putBuilding(req: Request, res: Response): Promise<void> {
 
 export async function deleteBuilding(req: Request, res: Response): Promise<void> {
 	const datadir = DataDirectory.getInstance().getDataDirectory();
-	const model = new Model(datadir);
-	const output = await model.deleteBuilding(req.params.buildingId);
+	const service = new FacilitiesService(datadir);
+	const output = await service.deleteBuilding(req.params.buildingId);
 	res.status(output.status).send(output.body);
 }

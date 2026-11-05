@@ -19,6 +19,7 @@ import { Course } from "./services/course";
 import { Section } from "./services/section";
 import { Building } from "./services/building";
 import { Room } from "./services/room";
+import { FacilitiesService } from "./services/facilitiesService";
 
 const datasets: Dataset[] = [];
 const RESULT_LIMIT = 5000;
@@ -143,8 +144,7 @@ export class Model {
 	constructor(private datadir: string) {}
 	public data: {
 		courses: Course[];
-		buildings: Building[];
-	} = { courses: [], buildings: [] };
+	} = { courses: [] };
 
 	public async readCourses(): Promise<void> {
 		this.data.courses = await Course.getCourses();
@@ -152,22 +152,6 @@ export class Model {
 
 	public async writeCourses(): Promise<void> {
 		await Course.writeCourses(this.data.courses);
-	}
-
-	public async readBuildings(): Promise<void> {
-		try {
-			const read = await fs.readFile(`${this.datadir}/buildings.json`, "utf-8");
-			this.data.buildings = JSON.parse(read).map((building: Building) => Building.buildBuilding(building));
-		} catch {
-			this.data.buildings = [];
-		}
-	}
-
-	public async writeBuildings(): Promise<void> {
-		await fs.writeFile(
-			`${this.datadir}/buildings.json`,
-			JSON.stringify(this.data.buildings.map((building) => building.getJSONFull()))
-		);
 	}
 
 	public async postDataset(body: any, file: any): Promise<ApiOutput> {
@@ -328,8 +312,13 @@ export class Model {
 				},
 			};
 		}
-		if (body.kind === "course_offerings") await this.readCourses();
-		else if (body.kind === "facilities") await this.readBuildings();
+		let facilitiesService: FacilitiesService | undefined;
+		if (body.kind === "course_offerings") {
+			await this.readCourses();
+		} else if (body.kind === "facilities") {
+			facilitiesService = new FacilitiesService(this.datadir);
+			await facilitiesService.readBuildings();
+		}
 
 		let allKeys = structuredClone(KEY);
 		if (body.query.WHERE === undefined) return errorBadRequest("Missing WHERE");
@@ -421,7 +410,7 @@ export class Model {
 			if (body.query.OPTIONS.COLUMNS.some((column: string) => SECTIONS_KEY.includes(column)))
 				return errorBadRequest("Cannot mix course_offerings and facilities fields in one query");
 			const rooms: Room[] = [];
-			for (const building of this.data.buildings) building.rooms.map((room) => rooms.push(room));
+			for (const building of facilitiesService!.data.buildings) building.rooms.map((room) => rooms.push(room));
 			filtered = filterRecords(body.query.WHERE, rooms, ROOMS_MKEY, ROOMS_SKEY, SECTIONS_MKEY, SECTIONS_SKEY);
 		}
 		if (filtered.error && filtered.error !== "no filter") {
@@ -469,263 +458,6 @@ export class Model {
 			status: 200,
 			body: infoArr,
 		};
-	}
-
-	public async getBuildings(buildingsLimit: any, buildingsOffset: any): Promise<ApiOutput> {
-		await this.readBuildings();
-		let limit = 100;
-		let offset = 0;
-		if (buildingsLimit !== undefined) limit = Number(buildingsLimit);
-		if (buildingsOffset !== undefined) offset = Number(buildingsOffset);
-
-		const valid = validateGetParams(limit, offset);
-		if (!valid.valid) {
-			return {
-				status: 400,
-				body: {
-					error: "Invalid request parameters",
-					params: valid.fields,
-				},
-			};
-		}
-
-		const buildings = this.data.buildings.map((building) => building.getJSONLinks());
-		const buildingsLength = buildings.length;
-		buildings.splice(0, offset);
-		if (buildings.length > limit) buildings.splice(limit);
-
-		return {
-			status: 200,
-			body: {
-				total: buildingsLength,
-				limit: limit,
-				offset: offset,
-				items: buildings,
-			},
-		};
-	}
-
-	public async getBuildingById(buildingId: string): Promise<ApiOutput> {
-		await this.readBuildings();
-		const building = this.data.buildings.find((b) => b.id === buildingId);
-		if (building === undefined || building === null) {
-			return {
-				status: 404,
-				body: {
-					error: "Not found",
-					message: `no building with id '${buildingId}'`,
-				},
-			};
-		}
-		return {
-			status: 200,
-			body: building.getJSONLinks(),
-		};
-	}
-
-	public async setBuilding(
-		buildingId: string,
-		name: any,
-		address: any,
-		lat: any,
-		lon: any,
-		campus?: any
-	): Promise<ApiOutput> {
-		await this.readBuildings();
-		const valid = validateBuildingParams(name, address, lat, lon, campus);
-		if (!valid.valid) {
-			return {
-				status: 422,
-				body: {
-					error: "Validation failed",
-					fields: valid.fields,
-				},
-			};
-		}
-
-		const existingBuilding = this.data.buildings.find((building) => building.id === buildingId); // keep a ref to the building
-		let exist = false; // check if the building exists
-		if (existingBuilding) {
-			exist = true;
-			await this.deleteBuilding(buildingId); // delete the building if it exists
-		}
-		const finalCampus = campus !== undefined ? campus : existingBuilding?.campus; // use the campus from the request if provided, otherwise use the existing old campus as the building was already existing
-		const building = new Building(buildingId, name, address, lat, lon, finalCampus);
-		this.data.buildings.push(building);
-		await this.writeBuildings();
-		if (exist) {
-			return { status: 204 };
-		} else {
-			return {
-				status: 201,
-				body: building.getJSONLinks(),
-			};
-		}
-	}
-
-	public async deleteBuilding(buildingId: string): Promise<ApiOutput> {
-		await this.readBuildings();
-		const index = this.data.buildings.findIndex((building) => building.id === buildingId);
-		if (index >= 0) {
-			const body = this.data.buildings[index].getJSONForDelete();
-			this.data.buildings.splice(index, 1);
-			await this.writeBuildings();
-			return {
-				status: 200,
-				body: body,
-			};
-		} else {
-			return {
-				status: 404,
-				body: {
-					error: "Not found",
-					message: `no building with id '${buildingId}'`,
-				},
-			};
-		}
-	}
-
-	public async getRooms(buildingId: string, roomsLimit: any, roomsOffset: any): Promise<ApiOutput> {
-		await this.readBuildings();
-		const building = this.data.buildings.find((b) => b.id === buildingId);
-		if (building === undefined || building === null) {
-			return {
-				status: 404,
-				body: {
-					error: "Not found",
-					message: `no building with id '${buildingId}'`,
-				},
-			};
-		}
-
-		let limit = 100;
-		let offset = 0;
-
-		if (roomsLimit !== undefined) limit = Number(roomsLimit);
-		if (roomsOffset !== undefined) offset = Number(roomsOffset);
-
-		const valid = validateGetParams(limit, offset);
-		if (!valid.valid) {
-			return {
-				status: 400,
-				body: {
-					error: "Invalid request parameters",
-					params: valid.fields,
-				},
-			};
-		}
-
-		const rooms = building.getRooms().map((room) => room.getJSONLinks());
-		const roomsLength = rooms.length;
-
-		rooms.splice(0, offset);
-		if (rooms.length > limit) rooms.splice(limit);
-
-		return {
-			status: 200,
-			body: {
-				total: roomsLength,
-				limit: limit,
-				offset: offset,
-				items: rooms,
-			},
-		};
-	}
-
-	public async getRoomById(buildingId: string, roomId: string): Promise<ApiOutput> {
-		await this.readBuildings();
-		const building = this.data.buildings.find((b) => b.id === buildingId);
-		if (building === undefined || building === null) {
-			return {
-				status: 404,
-				body: {
-					error: "Not found",
-					message: `no building with id '${buildingId}'`,
-				},
-			};
-		}
-		const room = building.getRoomById(roomId);
-		if (!room) {
-			return {
-				status: 404,
-				body: {
-					error: "Not found",
-					message: `no room with id '${roomId}'`,
-				},
-			};
-		} else {
-			return {
-				status: 200,
-				body: room.getJSONLinks(),
-			};
-		}
-	}
-
-	public async setRoom(buildingId: string, roomId: string, params: any): Promise<ApiOutput> {
-		await this.readBuildings();
-		const building = this.data.buildings.find((b) => b.id === buildingId);
-		if (building === undefined || building === null) {
-			return {
-				status: 404,
-				body: {
-					error: "Not found",
-					message: `no building with id '${buildingId}'`,
-				},
-			};
-		}
-		const valid = validateRoomParams(params, buildingId);
-		if (!valid.valid) {
-			return {
-				status: 422,
-				body: {
-					error: "Validation failed",
-					fields: valid.fields,
-				},
-			};
-		}
-		const { number, type, furniture, href, seats } = params;
-		const output = building.setRoom(roomId, number, type, furniture, href, seats);
-		await this.writeBuildings();
-		if (output.replace) {
-			return {
-				status: 204,
-			};
-		} else {
-			return {
-				status: 201,
-				body: output.body,
-			};
-		}
-	}
-
-	public async deleteRoom(buildingId: string, roomId: string): Promise<ApiOutput> {
-		await this.readBuildings();
-		const building = this.data.buildings.find((b) => b.id === buildingId);
-		if (!building) {
-			return {
-				status: 404,
-				body: {
-					error: "Not found",
-					message: `no building with id '${buildingId}'`,
-				},
-			};
-		}
-		const output = building.deleteRoom(roomId);
-		if (!output.success) {
-			return {
-				status: 404,
-				body: {
-					error: "Not found",
-					message: `no room with id '${roomId}'`,
-				},
-			};
-		} else {
-			await this.writeBuildings();
-			return {
-				status: 200,
-				body: output.body,
-			};
-		}
 	}
 }
 
@@ -781,7 +513,7 @@ class BuildingsDataset extends Dataset {
 		this.valid_zip = isValidZip;
 		this.htmlFileDir = dir;
 		try {
-			this.model = new Model(datadir);
+			this.facilitiesService = new FacilitiesService(datadir);
 		} catch (err) {
 			// console.log("failed to create a new model in BuildingsDataset");
 			throw err;
@@ -789,7 +521,7 @@ class BuildingsDataset extends Dataset {
 	}
 
 	//private parse5;
-	private model;
+	private facilitiesService: FacilitiesService;
 	private valid_zip;
 	private htmlFileDir;
 
@@ -1342,15 +1074,15 @@ class BuildingsDataset extends Dataset {
 	}
 
 	private async uploadBuildingsData(buildings: Building[]): Promise<void> {
-		await this.model.readBuildings();
+		await this.facilitiesService.readBuildings();
 
-		const original: Building[] = this.model.data.buildings;
+		const original: Building[] = this.facilitiesService.data.buildings;
 
 		const newBuildings: Building[] = this.combineBuildings(buildings, original);
 
-		this.model.data.buildings = newBuildings;
+		this.facilitiesService.data.buildings = newBuildings;
 
-		await this.model.writeBuildings();
+		await this.facilitiesService.writeBuildings();
 
 		this.buildings_status.status = "completed";
 		this.buildings_status.message = "Dataset processing complete";
