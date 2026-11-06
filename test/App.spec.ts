@@ -6,6 +6,7 @@ import { Application, createApp } from "../src/App";
 import path from "path";
 import http from "http";
 import { createReusableServer } from "./TestServer";
+import { FakeGeoLocator } from "./FakeGeoLocator";
 
 // test
 
@@ -57,7 +58,12 @@ describe("REST API v2", function () {
 	const app = testServer.server;
 
 	beforeEach(async () => {
-		testServer.setHandler(await createApp({ datadir }));
+		testServer.setHandler(
+			await createApp({
+				datadir,
+				geolocator: new FakeGeoLocator((address) => ({ lat: 49.2606, lon: -123.246 })),
+			})
+		);
 	});
 
 	afterEach(async () => {
