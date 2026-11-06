@@ -5,6 +5,7 @@ import request from "supertest";
 import { StatusCodes } from "http-status-codes";
 import { createApp } from "../../src/App";
 import { createReusableServer } from "../TestServer";
+import { FakeGeoLocator } from "../FakeGeoLocator";
 
 const { OK, ACCEPTED } = StatusCodes;
 const datadir = "./data" as const;
@@ -28,7 +29,12 @@ describe("Campus parse (D1)", function () {
 	const app = testServer.server;
 
 	beforeEach(async () => {
-		testServer.setHandler(await createApp({ datadir }));
+		testServer.setHandler(
+			await createApp({
+				datadir,
+				geolocator: new FakeGeoLocator((address) => ({ lat: 49.2606, lon: -123.246 })),
+			})
+		);
 	});
 	afterEach(async () => {
 		await fs.rm(datadir, { recursive: true, force: true });
