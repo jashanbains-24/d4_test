@@ -20,6 +20,8 @@ import { Section } from "./services/section";
 import { Building } from "./services/building";
 import { Room } from "./services/room";
 import { FacilitiesService } from "./services/facilitiesService";
+import { GeoLocator } from "./services/GeoLocator";
+import { IGeoLocator } from "./services/IGeoLocator";
 
 const datasets: Dataset[] = [];
 const RESULT_LIMIT = 5000;
@@ -46,6 +48,7 @@ export type AppConfig = {
 	 * During autograding, the directory will be deleted as a means to reset the application data between tests.
 	 */
 	readonly datadir: string;
+	readonly geolocator?: IGeoLocator;
 };
 
 export interface FilterableRecord {
@@ -60,6 +63,7 @@ export async function createApp(config: AppConfig): Promise<Application> {
 	const app = express();
 
 	const { datadir } = config;
+	const geolocator = config.geolocator ?? new GeoLocator();
 
 	// initialize datadir singleton
 	DataDirectory.getInstance(datadir);
@@ -90,37 +94,37 @@ export async function createApp(config: AppConfig): Promise<Application> {
 	});
 
 	app.post("/api/v2/datasets", upload.single("archive"), async (req, res) => {
-		const model = new Model(datadir);
+		const model = new Model(datadir, geolocator);
 		const output = await model.postUpdatedDataset(req.body, req.file);
 		res.status(output.status).json(output.body);
 	});
 
 	app.post("/api/v1/datasets", upload.single("archive"), async (req, res) => {
-		const model = new Model(datadir);
+		const model = new Model(datadir, geolocator);
 		const output = await model.postDataset(req.body, req.file);
 		res.status(output.status).json(output.body);
 	});
 
 	app.get("/api/v1/datasets/:id", async (req, res) => {
-		const model = new Model(datadir);
+		const model = new Model(datadir, geolocator);
 		const output = model.getDataset(req.params.id);
 		res.status(output.status).json(output.body);
 	});
 
 	app.get("/api/v2/datasets/:id", async (req, res) => {
-		const model = new Model(datadir);
+		const model = new Model(datadir, geolocator);
 		const output = model.getDataset(req.params.id);
 		res.status(output.status).json(output.body);
 	});
 
 	app.post("/api/v1/search", async (req, res) => {
-		const model = new Model(datadir);
+		const model = new Model(datadir, geolocator);
 		const output = await model.searchSectionsV1(req.body);
 		res.status(output.status).json(output.body);
 	});
 
 	app.post("/api/v2/search", async (req, res) => {
-		const model = new Model(datadir);
+		const model = new Model(datadir, geolocator);
 		const output = await model.searchV2(req.body);
 		res.status(output.status).json(output.body);
 	});
@@ -141,7 +145,10 @@ const KEY = [...MKEY, ...SKEY];
 type ApiOutput = { status: number; body?: any };
 
 export class Model {
-	constructor(private datadir: string) {}
+	constructor(
+		private datadir: string,
+		private geolocator: IGeoLocator = new GeoLocator()
+	) {}
 	public data: {
 		courses: Course[];
 	} = { courses: [] };
@@ -199,7 +206,7 @@ export class Model {
 		const id = datasets.length;
 
 		if (valid.file_type === "facilities") {
-			const buildingsDataset = new BuildingsDataset(id, valid.zip, this.datadir, valid.is_valid_zip);
+			const buildingsDataset = new BuildingsDataset(id, valid.zip, this.datadir, valid.is_valid_zip, this.geolocator);
 			backgroundQueue = backgroundQueue
 				.then(() => buildingsDataset.startProcess())
 				.catch(() => {
@@ -487,21 +494,13 @@ type BuildingInfo = {
 	link: string | undefined;
 };
 
-type CoordResponseFormat = {
-	lat?: number;
-	lon?: number;
-	error?: string;
-};
-
-const geoServiceUrl = "http://cs310.students.cs.ubc.ca:11316/api/v1/geolocation/";
-const GEO_SERVICE_TIMEOUT_MS = 5000;
-
 class BuildingsDataset extends Dataset {
 	constructor(
 		public id: number,
 		private dir: JSZip, // Some .htm file?
 		private datadir: string,
-		private isValidZip: Boolean
+		private isValidZip: Boolean,
+		private geolocator: IGeoLocator
 	) {
 		super(id);
 		// try {
@@ -806,33 +805,17 @@ class BuildingsDataset extends Dataset {
 
 		await Promise.all(
 			buildingsInfo.map(async (building: BuildingInfo, index: number) => {
-				const url = geoServiceUrl + encodeURIComponent(building.address);
-				let res: Response;
-				let body: CoordResponseFormat | null;
-				try {
-					res = await fetch(url, { signal: AbortSignal.timeout(GEO_SERVICE_TIMEOUT_MS) });
-					body = (await res.json()) as any;
-				} catch {
-					// geolocation service unreachable, too slow, or returned a non-JSON response; skip this building
+				const coords = await this.geolocator.locate(building.address);
+				if (coords === undefined) {
 					return;
 				}
 
-				// console.log("fetch response: ", res.status, "\n");
-
 				if (
-					body !== undefined &&
-					body !== null &&
-					res.status === StatusCodes.OK &&
-					!body.error &&
-					body.lat &&
-					body.lon &&
 					building.link !== undefined &&
 					building.link !== null &&
-					validateBuildingParams(building.fullname, building.address, body.lat, body.lon)
+					validateBuildingParams(building.fullname, building.address, coords.lat, coords.lon)
 				) {
-					// console.log("building validated\n");
-					const { shortname, fullname, address } = building;
-					const bldng = new Building(shortname, fullname, address, body.lat, body.lon);
+					const bldng = new Building(building.shortname, building.fullname, building.address, coords.lat, coords.lon);
 					const pair: Pair<Building, string> = { first: bldng, second: building.link };
 					buildings.push(pair);
 				}
